@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define LISTENQ 1024
 #define MAXLINE 4096

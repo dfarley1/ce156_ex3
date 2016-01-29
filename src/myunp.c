@@ -30,7 +30,7 @@ void err_quit(const char *format, ...)
 
 void err_sys(const char *s, ...)
 {
-    printf("err_sys: %s\n", s); exit(1);
+    printf("err_sys: %s: %s\n", s, strerror(errno)); exit(1);
 }
 
 void bzero(void *p, size_t len) { memset(p, 0, len); }
@@ -80,7 +80,7 @@ int Accept(int sockfd, struct sockaddr *cliaddr, socklen_t *addrlen)
 
     if ( (n = accept(sockfd, cliaddr, addrlen)) < 0)
     {
-        err_sys("accept error");
+        printf("  Accept() error: %s!  Ignoring connection.", strerror(errno));
     }
 
     return n;
@@ -92,7 +92,7 @@ int Close(int sockfd)
 
     if ( (n = close(sockfd)) < 0)
     {
-        err_sys("close error");
+        printf("  Close() error: %s!  What do I do!?", strerror(errno));
     }
 
     return n;
@@ -104,7 +104,8 @@ int Read(int sockfd, char *buffer, int bufferlen)
 
     if ( (n = read(sockfd, buffer, bufferlen)) < 0)
     {
-        err_sys("read error");
+        printf("  Read() error: %s!  Closing connection...", strerror(errno));
+        Close(sockfd);
     }
 
     return n;
@@ -116,7 +117,8 @@ int Write(int sockfd, char *buffer, int bufferlen)
 
     if ( (n = write(sockfd, buffer, bufferlen)) < 0)
     {
-        err_sys("write error");
+        printf("  Write() error: %s!  Closing connection...", strerror(errno));
+        Close(sockfd);
     }
 
     return n;

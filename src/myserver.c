@@ -1,8 +1,8 @@
 /*
-*   File:       myserver.c
-*
-*   Purpose:    This is a skeleton file for a server.
-*/
+ * Daniel Farley - dfarley@ucsc.edu
+ * CE 156 - Programing Assignment 1
+ * Server code.  Run as "./myserver <port number>"
+ */
 
 #include "myunp.h"
 
