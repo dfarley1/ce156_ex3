@@ -8,22 +8,22 @@
 
 typedef struct {
     char **IPs;
+    unsigned int *ports;
     int num;
     int linesAlloced;
-    unsigned int *ports;
 } servers_t;
 
-servers_t *readServerList(FILE *serversFile);
-void freeServerList(servers_t *servers);
+servers_t *servers;
+
+void readServerList(FILE *serversFile);
+void freeServers();
+int getFileSize();
 
 int main(int argc, char **argv)
 {
-    int numConns = 0; 
-    unsigned int port_num;
-    char *filename = calloc(MAXLINE, sizeof(char));// **servers, **server_ips, **server_ports, 
+    int numConns = 0, fileSize;
+    char filename[MAXLINE];// **servers, **server_ips, **server_ports, 
     FILE *serversFile;
-    servers_t* servers;
-    struct sockaddr_in servaddr;
     
     //arg checking
     //printf("checking args...\n");
@@ -45,7 +45,7 @@ int main(int argc, char **argv)
     
     //Get the list of servers
     //printf("starting read....\n");
-    servers = readServerList(serversFile);
+    readServerList(serversFile);
     fclose(serversFile);
     
     servers->num = (servers->num > numConns)?(numConns):(servers->num);
@@ -55,6 +55,8 @@ int main(int argc, char **argv)
     for (i = 0; i < servers->num; i++) {
         printf("  %s:%d\n", servers->IPs[i], servers->ports[i]);
     }
+    
+    fileSize = getFileSize();
     
     /*
     //try to connect to a server
@@ -87,17 +89,17 @@ int main(int argc, char **argv)
     */
     
     
-    freeServerList(servers);
+    freeServers();
     return 0;
 }
 
 //Read server IPs/ports into string array
 //Modified from https://stackoverflow.com/a/19174415
-servers_t *readServerList(FILE *serversFile)
+void readServerList(FILE *serversFile)
 {
     int max_line_len = 30;
     
-    servers_t* servers = calloc(1, sizeof(servers_t));
+    servers = calloc(1, sizeof(servers_t));
     servers->linesAlloced = 4;
     servers->num = 0;
     
@@ -159,10 +161,8 @@ servers_t *readServerList(FILE *serversFile)
         servers->ports[i] = strtoul(port_num_str, NULL, 10);
         *port_num_str = '\0';
     }
-    
-    return servers;
 }
-void freeServerList(servers_t *servers)
+void freeServers()
 {
     int i;
     for (i = 0; i < servers->linesAlloced; i++) {
@@ -172,3 +172,11 @@ void freeServerList(servers_t *servers)
     free(servers->ports);
     free(servers);
 }
+
+int getFileSize()
+{
+    int fileSize, sockfd;
+    char filename[MAXLINE], recvline[MAXLINE];
+    struct sockaddr_in servaddr;
+}
+    
