@@ -1,0 +1,2 @@
+*.d linguist-language=C
+*.o linguist-language=C
