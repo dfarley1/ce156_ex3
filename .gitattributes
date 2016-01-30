@@ -1,2 +1,1 @@
-*.d linguist-language=C
-*.o linguist-language=C
+*.do linguist-language=C
