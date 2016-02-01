@@ -16,7 +16,7 @@ typedef struct {
 servers_t *servers;
 
 void readServerList(FILE *serversFile);
-void freeServers();
+void freeServerList();
 int getFileSize();
 
 int main(int argc, char **argv)
@@ -89,7 +89,7 @@ int main(int argc, char **argv)
     */
     
     
-    freeServers();
+    freeServerList();
     return 0;
 }
 
@@ -162,7 +162,8 @@ void readServerList(FILE *serversFile)
         *port_num_str = '\0';
     }
 }
-void freeServers()
+
+void freeServerList()
 {
     int i;
     for (i = 0; i < servers->linesAlloced; i++) {
@@ -175,8 +176,56 @@ void freeServers()
 
 int getFileSize()
 {
-    int fileSize, sockfd;
+    int fileSize, sockfd, n;
     char filename[MAXLINE], recvline[MAXLINE];
     struct sockaddr_in servaddr;
+    
+    bzero(filename, MAXLINE);
+    bzero(recvline, MAXLINE);
+    
+    printf("Enter file name: ");
+    fgets(filename, MAXLINE/2, stdin);  //should be enough room, right?
+    
+    //Try to connect to a server
+    int i = 0;
+    while (1) {
+        //If we've tried all servers then just crash
+        if (i >= servers->num) {
+            err_sys("getFileSize():  ERROR: No servers reachable, tried %d!\n", i);
+        }
+        
+        bzero(&servaddr, sizeof(servaddr));
+        sockfd = Socket(AF_INET, SOCK_STREAM, 0);
+        
+        servaddr.sin_family = AF_INET;
+        servaddr.sin_port = htons(servers->ports[i]);
+        if (inet_pton(AF_INET, servers->IPs[i], &servaddr.sin_addr) <= 0) {
+            err_quit("getFileSize():  ERROR: inet_pton error for %s\n", servers->IPs[i]);
+        }
+        
+        //If connection is successful then break, if not, i++ and try next one
+        if (connect(sockfd, (SA *) &servaddr, sizeof(servaddr)) < 0) {
+            i++;
+            continue;
+        } else {
+            break;
+        }
+    }
+    printf("getFileSize():  Connected to %s:%d\n", servers->IPs[i], servers->ports[i]);
+    strcpy((filename+strlen(filename)),"-1\n-1\n\n"); //append dummy <start> and <size> parameters
+    
+    printf("getFileSize():  sending \"%s\"\n", filename);
+    Write(sockfd, filename, strlen(filename));
+    
+    while ((n = Read(sockfd, recvline, MAXLINE-1)) > 0) {
+        recvline[n] = 0;
+        printf("recieved \"%s\"\n", recvline);
+        if (sscanf(recvline, "%d", &fileSize) != 1) {
+            err_sys("getFileSize():  ERROR: sscanf() failed to get a fileSize\n");
+        }
+    }
+    
+    printf("getFileSize():  Returning %d\n\n", fileSize);
+    return fileSize;
 }
     
