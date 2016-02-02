@@ -13,16 +13,23 @@ typedef struct {
     int linesAlloced;
 } servers_t;
 
+typedef struct {
+    char *filename;
+    int start, size, thread_id;
+} tInfo_t;
+
 servers_t *servers;
 
 void readServerList(FILE *serversFile);
 void freeServerList();
-int getFileSize();
+int getFileSize(char *filename);
+void downloadFile(char *filename, int fileSize);
+void *childDownloader (void *threadInfo);
 
 int main(int argc, char **argv)
 {
     int numConns = 0, fileSize;
-    char filename[MAXLINE];// **servers, **server_ips, **server_ports, 
+    char filename[MAXLINE];
     FILE *serversFile;
     
     //arg checking
@@ -34,13 +41,13 @@ int main(int argc, char **argv)
     
     if (sscanf(argv[2], "%d", &numConns) != 1) {
         printf("  Error: Invalid num connections\n\n");
-        exit(1);
+        exit(2);
     }
     
     //printf("trying to fopen(%s)...\n", argv[1]);
     if ((serversFile = fopen(argv[1], "r")) == NULL) {
         printf("  Error opening server-info.text: %d: %s\n\n", errno, strerror(errno));
-        exit(1);
+        exit(3);
     } 
     
     //Get the list of servers
@@ -56,37 +63,12 @@ int main(int argc, char **argv)
         printf("  %s:%d\n", servers->IPs[i], servers->ports[i]);
     }
     
-    fileSize = getFileSize();
-    
-    /*
-    //try to connect to a server
-    int i;
-    for (i = 0; i < numConns; i++) {
-        bzero(&servaddr, sizeof(servaddr));
-        servaddr.sin_family = AF_INET;
-        
-        //get port_num from servers list
-        char *port_num_str = strchr(servers[i], ' ');
-        port_num = strtoul(port_num_str, NULL, 10);
-        servaddr.sin_port = htons(port_num);
-        
-        //Need to put IP address in its own string because
-        // inet_pton() can't ignore the port
-        printf("%d    ", port_num_str - servers[i]);
-        char *ip_str = calloc(16, sizeof(char));
-        strncpy(ip_str, servers[i], port_num_str - servers[i]);
-        printf("\"%s\"\n", ip_str);
-        if (inet_pton(AF_INET, ip_str, &servaddr.sin_addr) <= 0) {
-            err_quit("inet_pton error for %s\n", ip_str);
-        }
-        free(ip_str);
-        
-        //try to connect, if not then try next server, if so 
-        if (connect(sockfd, (SA *) &servaddr, sizeof(servaddr)) < 0) {
-            err_sys("connect error");
-        }
+    fileSize = getFileSize(filename);
+    if (fileSize < 1) {
+        exit(4);
     }
-    */
+    
+    downloadFile(filename, fileSize);
     
     
     freeServerList();
@@ -174,17 +156,19 @@ void freeServerList()
     free(servers);
 }
 
-int getFileSize()
+int getFileSize(char *filename)
 {
-    int fileSize, sockfd, n;
-    char filename[MAXLINE], recvline[MAXLINE];
+    int fileSize = 0, sockfd, n;
+    char recvline[MAXLINE], sizePacket[MAXLINE];;
     struct sockaddr_in servaddr;
     
+    bzero(sizePacket, MAXLINE);
     bzero(filename, MAXLINE);
     bzero(recvline, MAXLINE);
     
     printf("Enter file name: ");
-    fgets(filename, MAXLINE/2, stdin);  //should be enough room, right?
+    fgets(sizePacket, MAXLINE/2, stdin);  //should be enough room, right?
+    strncpy(filename, sizePacket, strchr(sizePacket, '\n') - sizePacket);
     
     //Try to connect to a server
     int i = 0;
@@ -212,20 +196,79 @@ int getFileSize()
         }
     }
     printf("getFileSize():  Connected to %s:%d\n", servers->IPs[i], servers->ports[i]);
-    strcpy((filename+strlen(filename)),"-1\n-1\n\n"); //append dummy <start> and <size> parameters
+    strcpy((sizePacket+strlen(sizePacket)),"-1\n-1\n\n"); //append dummy <start> and <size> parameters
     
-    printf("getFileSize():  sending \"%s\"\n", filename);
-    Write(sockfd, filename, strlen(filename));
+    printf("getFileSize():  sending \"%s\"\n", sizePacket);
+    Write(sockfd, sizePacket, strlen(sizePacket));
     
     while ((n = Read(sockfd, recvline, MAXLINE-1)) > 0) {
         recvline[n] = 0;
         printf("recieved \"%s\"\n", recvline);
         if (sscanf(recvline, "%d", &fileSize) != 1) {
-            err_sys("getFileSize():  ERROR: sscanf() failed to get a fileSize\n");
+            printf("getFileSize():  sscanf() ERROR.  Server returned:\n  %s\n\n", recvline);
+            exit(4);
         }
     }
     
     printf("getFileSize():  Returning %d\n\n", fileSize);
     return fileSize;
 }
+
+void downloadFile(char *filename, int fileSize)
+{
+    //spawn children
+    int rc;
+    pthread_t tid[servers->num];
+    void *vptr_return[servers->num];
     
+    int i;
+    for (i = 0; i < servers->num; i++) {
+        tInfo_t *tInfo = (tInfo_t *) malloc(sizeof(tInfo_t));
+        tInfo->filename = filename;
+        tInfo->thread_id = i;
+        
+        //The last thread needs to pick up the slack if fileSize doesn't divide evenly
+        if (i == (servers->num - 1)) { 
+            tInfo->start = i * (fileSize / servers->num);
+            tInfo->size = (fileSize / servers->num) 
+                           + (fileSize - (fileSize / servers->num) * servers->num);
+        } else {
+            tInfo->start = i * (fileSize / servers->num);
+            tInfo->size = fileSize / servers->num;
+        }
+        printf("Creating thread %d: \"%s\"|%d|%d\n", 
+                tInfo->thread_id, tInfo->filename, tInfo->start, tInfo->size);
+                
+        rc = pthread_create(&tid[i], NULL, childDownloader, (void *) tInfo);
+        if (rc) {
+            printf("downloadFile(): pthread_create() ERROR: %s\n", strerror(rc));
+            exit(5);
+        }
+    }
+    
+    for (i = 0; i < servers->num; i++) {
+        pthread_join(tid[i], &vptr_return[i]);
+        printf("%d:%s\n", i, (char *)vptr_return[i]);
+        free(vptr_return[i]);
+    }
+    
+    
+    //get string pointers from children
+    
+    //print all children to file (how should it be named?)
+}
+
+void *childDownloader (void *threadInfo)
+{
+    tInfo_t *tInfo = (tInfo_t *) threadInfo;
+    setvbuf(stdout,NULL,_IONBF,0);
+    printf("Thread %d created: \"%s\"|%d|%d\n",
+             tInfo->thread_id, tInfo->filename, tInfo->start, tInfo->size);
+    
+    
+    char *test = calloc(3, sizeof(char));
+    sprintf(test, "%c", 'a' + tInfo->thread_id);
+    
+    free(tInfo);
+    pthread_exit((void *) test);
+}

@@ -5,6 +5,7 @@
 */
 
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -14,6 +15,7 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <errno.h>
+#include <pthread.h>
 
 #define LISTENQ 1024
 #define MAXLINE 4096
