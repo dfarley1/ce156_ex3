@@ -298,12 +298,12 @@ void *childDownloader (void *threadInfo)
     // Does this actually help at all?  Not really sure...
     //usleep(100000*(tInfo->thread_id));
     
-    int i = tInfo->thread_id; //TEST: change back to 0
+    int i = 0;
     while (1) {
         //If we've tried all servers then wait a second and try again
         if (i >= servers->num) {
             usleep(1000000);
-            i = tInfo->thread_id;
+            i = 0;
         }
         
         bzero(&servaddr, sizeof(servaddr));
