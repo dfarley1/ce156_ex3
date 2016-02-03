@@ -167,8 +167,8 @@ int getFileSize(char *filename)
     bzero(recvline, MAXLINE);
     
     printf("Enter file name: ");
-    fgets(sizePacket, MAXLINE/2, stdin);  //should be enough room, right?
-    strncpy(filename, sizePacket, strchr(sizePacket, '\n') - sizePacket);
+    fgets(filename, MAXLINE/2, stdin);  //should be enough room, right?
+    filename[strcspn(filename, "\n")] = 0;
     
     //Try to connect to a server
     int i = 0;
@@ -196,7 +196,7 @@ int getFileSize(char *filename)
         }
     }
     printf("getFileSize():  Connected to %s:%d\n", servers->IPs[i], servers->ports[i]);
-    strcpy((sizePacket+strlen(sizePacket)),"-1\n-1\n\n"); //append dummy <start> and <size> parameters
+    sprintf(sizePacket, "%d\n%d\n\n%s", -1, -1, filename);
     
     printf("getFileSize():  sending \"%s\"\n", sizePacket);
     Write(sockfd, sizePacket, strlen(sizePacket));
@@ -220,55 +220,145 @@ void downloadFile(char *filename, int fileSize)
     int rc;
     pthread_t tid[servers->num];
     void *vptr_return[servers->num];
+    tInfo_t *tInfo[servers->num];
     
     int i;
     for (i = 0; i < servers->num; i++) {
-        tInfo_t *tInfo = (tInfo_t *) malloc(sizeof(tInfo_t));
-        tInfo->filename = filename;
-        tInfo->thread_id = i;
+        tInfo[i] = (tInfo_t *) malloc(sizeof(tInfo_t));
+        tInfo[i]->filename = filename;
+        tInfo[i]->thread_id = i;
         
         //The last thread needs to pick up the slack if fileSize doesn't divide evenly
         if (i == (servers->num - 1)) { 
-            tInfo->start = i * (fileSize / servers->num);
-            tInfo->size = (fileSize / servers->num) 
+            tInfo[i]->start = i * (fileSize / servers->num);
+            tInfo[i]->size = (fileSize / servers->num) 
                            + (fileSize - (fileSize / servers->num) * servers->num);
         } else {
-            tInfo->start = i * (fileSize / servers->num);
-            tInfo->size = fileSize / servers->num;
+            tInfo[i]->start = i * (fileSize / servers->num);
+            tInfo[i]->size = fileSize / servers->num;
         }
         printf("Creating thread %d: \"%s\"|%d|%d\n", 
-                tInfo->thread_id, tInfo->filename, tInfo->start, tInfo->size);
+                tInfo[i]->thread_id, tInfo[i]->filename, tInfo[i]->start, tInfo[i]->size);
                 
-        rc = pthread_create(&tid[i], NULL, childDownloader, (void *) tInfo);
+        rc = pthread_create(&tid[i], NULL, childDownloader, (void *) tInfo[i]);
         if (rc) {
             printf("downloadFile(): pthread_create() ERROR: %s\n", strerror(rc));
             exit(5);
         }
     }
     
+    //get string pointers from children
     for (i = 0; i < servers->num; i++) {
         pthread_join(tid[i], &vptr_return[i]);
-        printf("%d:%s\n", i, (char *)vptr_return[i]);
-        free(vptr_return[i]);
+        printf("\n----- %d: -----\n|%s|\n----------\n", i, (char *)vptr_return[i]);
+        //free(vptr_return[i]);
     }
     
-    
-    //get string pointers from children
-    
     //print all children to file (how should it be named?)
+    char *newFileName = calloc(strlen(filename) + 3, sizeof(char));
+    strcpy(newFileName, filename);
+    strcpy(newFileName+strlen(newFileName), "_d");
+    
+    FILE *fp = fopen(newFileName, "w+");
+    if (fp) {
+        int i;
+        for (i = 0; i < servers->num; i++) {
+            char *chunk = (char *)vptr_return[i];
+            int j = 0;
+            do {
+                fputc(chunk[j++], fp);
+                if (j >= tInfo[i]->size) break;
+            } while (1);
+        }
+    } else {
+        printf("downloadFile(): fopen(%s) ERROR", newFileName);
+        exit(6);
+    }
+    fclose(fp);
+    
+    free(newFileName);
+    for (i = 0; i < servers->num; i++) {
+        free(vptr_return[i]);
+        free(tInfo[i]);
+    }
 }
 
 void *childDownloader (void *threadInfo)
 {
+    char *sizePacket, *recvline, *fileChunk;
+    int sockfd = 0, n, tStart = 0, tSize = 0;
+    struct sockaddr_in servaddr;
     tInfo_t *tInfo = (tInfo_t *) threadInfo;
+    
     setvbuf(stdout,NULL,_IONBF,0);
     printf("Thread %d created: \"%s\"|%d|%d\n",
              tInfo->thread_id, tInfo->filename, tInfo->start, tInfo->size);
     
+    //Let's offset the children so they're not all trying to connect at the same time.
+    // Does this actually help at all?  Not really sure...
+    //usleep(100000*(tInfo->thread_id));
     
-    char *test = calloc(3, sizeof(char));
-    sprintf(test, "%c", 'a' + tInfo->thread_id);
+    int i = tInfo->thread_id; //TEST: change back to 0
+    while (1) {
+        //If we've tried all servers then wait a second and try again
+        if (i >= servers->num) {
+            usleep(1000000);
+            i = tInfo->thread_id;
+        }
+        
+        bzero(&servaddr, sizeof(servaddr));
+        sockfd = Socket(AF_INET, SOCK_STREAM, 0);
+        
+        servaddr.sin_family = AF_INET;
+        servaddr.sin_port = htons(servers->ports[i]);
+        if (inet_pton(AF_INET, servers->IPs[i], &servaddr.sin_addr) <= 0) {
+            err_quit("getFileSize():  ERROR: inet_pton error for %s\n", servers->IPs[i]);
+        }
+        
+        //If connection is successful then break, if not, i++ and try next one
+        if (connect(sockfd, (SA *) &servaddr, sizeof(servaddr)) < 0) {
+            i++;
+            continue;
+        } else {
+            break;
+        }
+    }
     
-    free(tInfo);
-    pthread_exit((void *) test);
+    printf("childDownloader(%d):  connected to %s:%d\n", 
+            tInfo->thread_id, servers->IPs[i], servers->ports[i]);
+            
+    //Send packet requesting chunk
+    asprintf(&sizePacket, "%d\n%d\n\n%s", tInfo->start, tInfo->size, tInfo->filename);
+    printf("childDownloader(%d):  sending \"%s\"\n", tInfo->thread_id, sizePacket);
+    Write(sockfd, sizePacket, strlen(sizePacket));
+    
+    
+    
+    //get the chunk
+    recvline = calloc(strlen(sizePacket) + tInfo->size + 2, sizeof(char));
+    while ((n = Read(sockfd, recvline, strlen(sizePacket) + tInfo->size - 1)) > 0) {
+        recvline[n] = 0;
+    }
+    printf("recieved \"%s\"\n", recvline);
+    
+    if (sscanf(recvline, "%d\n%d", &tStart, &tSize) != 2) {
+        printf("childDownloader(%d):  sscanf() ERROR: Could not get header. Server returned:\n  %s\n\n", 
+                tInfo->thread_id, recvline);
+        pthread_exit(NULL);
+    }
+    if ((tStart != tInfo->start) || (tSize != tInfo->size)) {
+        printf("childDownloader(%d):  sscanf() ERROR: Sizes don't match.\n  %d  %d || %d  %d\n\n", 
+                tInfo->thread_id, tStart, tInfo->start, tSize, tInfo->size);
+        pthread_exit(NULL);
+    }
+    
+    fileChunk = calloc(tInfo->size + 1, sizeof(char));
+    memcpy(fileChunk, (strstr(recvline, "\n\n") + 2), tInfo->size);
+    fileChunk[tInfo->size] = 0;
+    
+    printf("childDownloader(%d): Chunk:\n%s\n", tInfo->thread_id, fileChunk);
+    
+    free(recvline);
+    free(sizePacket);
+    pthread_exit((void *) fileChunk);
 }

@@ -55,14 +55,9 @@ int main(int argc, char **argv)
         int start = 0, size = 0;
         bzero(filename, MAXLINE);
         
-        //No idea why I can't do both at the same time, stupid sscanf...
-        if (sscanf(recvline, "%[^\n]s", filename) != 1) {
-            printf("ERROR: sscanf(\"%s\") failed!  Closing connection...\n", filename);
-            Close(connfd);
-            continue;
-        }
-        if (sscanf((recvline+strlen(filename)), "%d\n%d", &start, &size) != 2) {
-            printf("ERROR: sscanf(%d   %d) failed!  Closing connection...\n", start, size);
+        if (sscanf(recvline, "%d\n%d\n\n%s", &start, &size, filename) != 3) {
+            printf("ERROR: sscanf(%d   %d  \"%s\") failed!  Closing connection...\n", 
+                    start, size, filename);
             Close(connfd);
             continue;
         }
@@ -109,7 +104,7 @@ int sendFileChunk(int connfd, char *filename, int start, int size)
     int retval = 0;
     char *output;
     struct stat st;
-    bzero(output, size);
+    //bzero(output, size);
     
     if (stat(filename, &st) != 0) {
         //-1 header specifies error, data portion will contain strerror
@@ -121,14 +116,14 @@ int sendFileChunk(int connfd, char *filename, int start, int size)
         retval = -1;
     } else {
         //if sizes don't match, send error
-        if (st.st_size != size) {
+        if (st.st_size < size) {
             asprintf(&output, "-1\n-1\n\nFile sizes do not match!  reported size=%d\n  found size=%d", 
                     size, st.st_size);
             
             printf("sendFileChunk(): ERROR.  Sending \"%s\" to client", output);
             retval = -2;
         //else if the start point is beyond the start of the file, send error
-        } else if (start >= size) {
+        } else if (start >= st.st_size) {
             asprintf(&output, "-1\n-1\n\nStart position larger than file size!  start=%d\n  size=%d", 
                     start, size);
             
@@ -137,26 +132,29 @@ int sendFileChunk(int connfd, char *filename, int start, int size)
         //otherwise, time to open the file
         } else {
             asprintf(&output, "%d\n%d\n\n", start, size);
-            output = realloc(output, strlen(output) + size + 1);
-            bzero(output + strlen(output), size + 1);
+            output = realloc(output, strlen(output) + size + 2);
+            bzero(output + strlen(output), size + 2);
             
             //put file chunk into output+strlen(output)
-            FILE *fp = fopen("filename", "r");
+            FILE *fp = fopen(filename, "r");
             if (fp) {
                 fseek(fp, start, SEEK_SET);
+                char *chunkStart = output + strlen(output);
                 int outsize = 0;
                 do {
-                    output[outsize++] = fgetc(fp);
-                    if (feof(fp)) break;
+                    chunkStart[outsize++] = fgetc(fp);
+                    if (outsize >= size) break;
                 } while (1);
                 fclose(fp);
+                
+                printf("sendFileChunk(): Sending ----------\n\"%s\"\n---------- to client", output);
             } else {
                 output = realloc(output, 8 + strlen(strerror(errno)) + 1);
                 bzero(output, 8 + strlen(strerror(errno)) + 1);
                 strcpy(output, "-1\n-1\n\n");
                 strcpy(output+strlen(output), strerror(errno));
                 
-                printf("sendFileChunk(): fopen() ERROR. Sending \"%s\" to client", output);
+                printf("sendFileChunk(): fopen(%s) ERROR. Sending \"%s\" to client", filename, output);
                 retval = -4;
             }
         }
@@ -164,5 +162,6 @@ int sendFileChunk(int connfd, char *filename, int start, int size)
     
     Write(connfd, output, strlen(output));
     Close(connfd);
+    free(output);
     return retval;
 }
