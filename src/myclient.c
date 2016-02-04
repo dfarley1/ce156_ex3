@@ -335,11 +335,19 @@ void *childDownloader (void *threadInfo)
     
     
     //get the chunk
-    recvline = calloc(strlen(sizePacket) + tInfo->size + 2, sizeof(char));
-    while ((n = Read(sockfd, recvline, strlen(sizePacket) + tInfo->size - 1)) > 0) {
+    recvline = calloc(strlen(sizePacket) + tInfo->size + 3, sizeof(char));
+    while ((n = Read(sockfd, recvline + n, strlen(sizePacket) + tInfo->size - 1)) > 0) {
+        printf("%d\n", n);
         recvline[n] = 0;
     }
-    printf("recieved \"%s\"\n", recvline);
+    
+    //Print what we got
+    printf("childDownloader(%d): Chunk received: ----------\n", tInfo->thread_id);
+    int t;
+    for (t = 0; t < strlen(sizePacket) + tInfo->size - strlen(tInfo->filename); t++) {
+        printf("%4d ", recvline[t]);
+    }
+    printf("\n----------\n");
     
     if (sscanf(recvline, "%d\n%d", &tStart, &tSize) != 2) {
         printf("childDownloader(%d):  sscanf() ERROR: Could not get header. Server returned:\n  %s\n\n", 
@@ -356,7 +364,15 @@ void *childDownloader (void *threadInfo)
     memcpy(fileChunk, (strstr(recvline, "\n\n") + 2), tInfo->size);
     fileChunk[tInfo->size] = 0;
     
-    printf("childDownloader(%d): Chunk:\n%s\n", tInfo->thread_id, fileChunk);
+    /*
+    //Print what we got
+    printf("childDownloader(%d): Chunk received: ----------\n", tInfo->thread_id);
+    int t;
+    for (t = 0; t < tInfo->size; t++) {
+        printf("%4d ", fileChunk[t]);
+    }
+    printf("\n----------\n");
+    */
     
     free(recvline);
     free(sizePacket);

@@ -11,6 +11,8 @@ int sendFileChunk(int connfd, char *filename, int start, int size);
 
 int main(int argc, char **argv)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
+    
     int listenfd, connfd, n;
     unsigned int port_num;
     char recvline[MAXLINE], output[MAXLINE];
@@ -106,6 +108,9 @@ int sendFileChunk(int connfd, char *filename, int start, int size)
     struct stat st;
     //bzero(output, size);
     
+    char * header;
+    asprintf(&header, "%d\n%d\n\n", start, size);
+    
     if (stat(filename, &st) != 0) {
         //-1 header specifies error, data portion will contain strerror
         output = calloc(8 + strlen(strerror(errno)) + 1, sizeof(char));
@@ -147,7 +152,13 @@ int sendFileChunk(int connfd, char *filename, int start, int size)
                 } while (1);
                 fclose(fp);
                 
-                printf("sendFileChunk(): Sending ----------\n\"%s\"\n---------- to client", output);
+                printf("sendFileChunk(): SUCCESS: Sending ----------\n", output);
+                int t;
+                for (t = 0; t < size; t++) {
+                    printf("%4d ", chunkStart[t]);
+                }
+                printf("\n----------\n");
+                
             } else {
                 output = realloc(output, 8 + strlen(strerror(errno)) + 1);
                 bzero(output, 8 + strlen(strerror(errno)) + 1);
@@ -160,7 +171,14 @@ int sendFileChunk(int connfd, char *filename, int start, int size)
         }
     }
     
-    Write(connfd, output, strlen(output));
+    printf("sendFileChunk(): SUCCESS: Sending ----------\n", output);
+    int t;
+    for (t = 0; t < strlen(header) + size; t++) {
+        printf("%4d ", output[t]);
+    }
+    printf("\n----------\n");
+    
+    Write(connfd, output, strlen(header) + size);
     Close(connfd);
     free(output);
     return retval;
