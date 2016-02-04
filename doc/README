@@ -1,0 +1,60 @@
+CMPE 156 EX2 - Client/Server to download files from multiple sources concurrently.
+Daniel Farley
+
+See doc/ex2.pdf for assignment requirements. 
+
+----------
+Files:
+Makefile - Primary makefile, compile with "make" (provided)
+bin/
+    Makefile - Assembles executables from object files in /obj (provided)
+    myserver - Server executable.
+    myclient - Client executable.
+doc/
+    README - This file
+obj/
+    Makefile - Creates objects from source code in /src (Provided)
+    myclient.d - Dependency files
+    myserver.d - 
+    myunp.d - 
+    myclient.o - Compiled objects
+    myserver.o - 
+    myunp.o - 
+src/
+    myclient.c - Client code
+    myserver.c - Server code
+    myunp.h - Header for UNP wrapper (provided)
+    myunp.c - UNP wrapper and error handling (Provided)
+    
+    
+
+----------
+Usage:
+    Client: myclient <server-into.text> <num connections>
+    Server: myserver <port num>
+
+
+----------
+Specification:
+Packets are transmitted between server and client using a variable-length string (char array) header followed by data as follows:
+
+"<start>\n<size>\n\n<data>"
+
+The start and size parameters are set using printf() on Integer values without variable width. (This is probably a poor design choice...) Start specifies how far into the file to start transmitting from and Size specifies how many bytes should be transmitted.  
+The client will always fill the Data section with the ASCII representation of the file name requested.  A special case is used to request the file size from the server; the client sends "-1\n-1\n\n<filename>" and the server responds with only the number of bytes in the file: "<filesize>".
+
+An example of communication between client and server looks something like this:
+Client: "-1\n-1\n\nfile.txt"
+Server: "12"
+Client: "0\n12\n\nfile.txt"
+Server: "0\n12\n\nabcdefghijkl"
+
+----------
+Error checking is done on the client side to make sure that the size sent by the server is a valid number.  The server checks that a file exists and that the start and size parameters are within the file's limits.  If something is wrong the server returns "-1\n-1\n\n<strerror(errno)>".  The client will then print this error and exit.  
+
+
+----------
+Bugs & notes:
+* Client does not ask user for a file name to save, it simply appends "_d" to the requested file name and overwrites any existing file with the same name
+* The server-info.txt file must have a trailing newline at the end of the list of IPs otherwise the last port number will be truncated
+* Unspecified behavior if a server goes down mid-transmission.  I believe the client will simply dump NULLs into the missing part of the file
