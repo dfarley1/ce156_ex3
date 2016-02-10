@@ -5,6 +5,7 @@
  */
 
 #include "myunp.h"
+#include "globals.h"
 
 int sendFileSize(int connfd, char *filename);
 int sendFileChunk(int connfd, char *filename, int start, int size);
@@ -13,10 +14,11 @@ int main(int argc, char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     
-    int listenfd, connfd, n;
+    int sockfd, n;
+    socklen_t len;
     unsigned int port_num;
-    char recvline[MAXLINE], output[MAXLINE];
-    struct sockaddr_in servaddr;
+    struct sockaddr_in servaddr, cliaddr;
+    packet_type *p_recv = calloc(sizeof(packet_type) + MAX_DATA_SIZE - 1, 1);
     
     //Check arguments
     if (argc != 2) {
@@ -26,53 +28,53 @@ int main(int argc, char **argv)
     port_num = strtoul(argv[1], NULL, 10);
     
     //Set up the socket
-    listenfd = Socket(AF_INET, SOCK_STREAM, 0);
+    sockfd = Socket(AF_INET, SOCK_STREAM, 0);
     
     bzero(&servaddr, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     servaddr.sin_port = htons(port_num);
     
-    Bind(listenfd, (SA *) &servaddr, sizeof(servaddr));
+    Bind(sockfd, (SA *) &servaddr, sizeof(servaddr));
     printf("  Server started on %s:%u...\n", inet_ntoa(servaddr.sin_addr), servaddr.sin_port);
     
-    Listen(listenfd, LISTENQ);
-    
     for (;;) {
-        bzero(recvline, MAXLINE);
-        bzero(output, MAXLINE);
+        len = sizeof(cliaddr);
         
-        //Wait for connection from client
-        connfd = Accept(listenfd, NULL, NULL);
-        if (connfd >= 0) {
-            //Read data from client
-            
-            while (strstr(recvline, "\n\n") == NULL) {
-                Read(connfd, recvline+strlen(recvline), MAXLINE-strlen(recvline)-1);
-            }
-            printf("recieved \"%s\"\n", recvline);
-        } else {}
-        
-        char filename[MAXLINE];
-        int start = 0, size = 0;
-        bzero(filename, MAXLINE);
-        
-        if (sscanf(recvline, "%d\n%d\n\n%s", &start, &size, filename) != 3) {
-            printf("ERROR: sscanf(%d   %d  \"%s\") failed!  Closing connection...\n", 
-                    start, size, filename);
-            Close(connfd);
-            continue;
-        }
-        
-        printf("\"%s\", %d, %d\n", filename, start, size);
-        
-        if (start == -1 && size == -1) {
-            sendFileSize(connfd, filename);
+        //Wait for and get a packet_type
+        //TODO: Should I do a peek first and make sure it's not a massive packet?
+        n = recvfrom(sockfd, 
+                     p_recv, 
+                     sizeof(packet_type) + MAX_DATA_SIZE - 1, 
+                     0, 
+                     (SA *) &cliaddr,
+                     &len);
+        if (n == -1) {
+            //error: ignore it?
+        } else if (n == 0) {
+            //"peer has performed an orderly shutdown"
+            //What do?
         } else {
-            sendFileChunk(connfd, filename, start, size);
+            switch (p_recv->opcode) {
+                case size_request:
+                    //sendFileSize
+                    break;
+                case size_reply:
+                    //ignore?
+                    break;
+                case chunk_request:
+                    //sendFileChunk
+                    break;
+                case chunk_reply:
+                    //ignore?
+                    break;
+                case error:
+                    //ignore?
+                    break;
+                default:
+                    break;
+            }
         }
-        
-        
     }
     
     return 0;

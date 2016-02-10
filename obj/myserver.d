@@ -32,4 +32,4 @@ myserver.o: ../src/myserver.c /usr/include/stdc-predef.h ../src/myunp.h \
  /usr/include/asm/errno.h /usr/include/asm-generic/errno.h \
  /usr/include/asm-generic/errno-base.h /usr/include/pthread.h \
  /usr/include/sched.h /usr/include/bits/sched.h \
- /usr/include/bits/setjmp.h
+ /usr/include/bits/setjmp.h ../src/globals.h
