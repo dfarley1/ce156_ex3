@@ -28,7 +28,7 @@ int main(int argc, char **argv)
     port_num = strtoul(argv[1], NULL, 10);
     
     //Set up the socket
-    sockfd = Socket(AF_INET, SOCK_STREAM, 0);
+    sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
     
     bzero(&servaddr, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
@@ -50,28 +50,36 @@ int main(int argc, char **argv)
                      (SA *) &cliaddr,
                      &len);
         if (n == -1) {
+            printf("recvfrom error: %s\n", strerror(errno));
             //error: ignore it?
         } else if (n == 0) {
+            printf("recvfrom error: n == 0\n");
             //"peer has performed an orderly shutdown"
             //What do?
         } else {
             switch (p_recv->opcode) {
                 case size_request:
                     //sendFileSize
+                    printf("size_request\n");
                     break;
                 case size_reply:
                     //ignore?
+                    printf("size_reply\n");
                     break;
                 case chunk_request:
                     //sendFileChunk
+                    printf("chunk_request\n");
                     break;
                 case chunk_reply:
                     //ignore?
+                    printf("chunk_reply\n");
                     break;
                 case error:
                     //ignore?
+                    printf("error\n");
                     break;
                 default:
+                    //ignore
                     break;
             }
         }

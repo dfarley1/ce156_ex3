@@ -32,4 +32,8 @@ myserver.o: ../src/myserver.c /usr/include/stdc-predef.h ../src/myunp.h \
  /usr/include/asm/errno.h /usr/include/asm-generic/errno.h \
  /usr/include/asm-generic/errno-base.h /usr/include/pthread.h \
  /usr/include/sched.h /usr/include/bits/sched.h \
- /usr/include/bits/setjmp.h ../src/globals.h
+ /usr/include/bits/setjmp.h /usr/include/signal.h \
+ /usr/include/bits/signum.h /usr/include/bits/siginfo.h \
+ /usr/include/bits/sigaction.h /usr/include/bits/sigcontext.h \
+ /usr/include/bits/sigstack.h /usr/include/sys/ucontext.h \
+ /usr/include/bits/sigthread.h ../src/globals.h

@@ -5,6 +5,7 @@
  */
 
 #include "myunp.h"
+#include "globals.h"
 
 typedef struct {
     char **IPs;
@@ -18,6 +19,7 @@ typedef struct {
     int start, size, thread_id;
 } tInfo_t;
 
+
 servers_t *servers;
 
 void readServerList(FILE *serversFile);
@@ -25,11 +27,12 @@ void freeServerList();
 int getFileSize(char *filename);
 void downloadFile(char *filename, int fileSize);
 void *childDownloader (void *threadInfo);
+static void recvfrom_alarm(int);
 
 int main(int argc, char **argv)
 {
     int numConns = 0, fileSize;
-    char filename[MAXLINE];
+    char filename[FILENAME_LENGTH + 1];
     FILE *serversFile;
     
     //arg checking
@@ -57,11 +60,11 @@ int main(int argc, char **argv)
     
     servers->num = (servers->num > numConns)?(numConns):(servers->num);
     
-    printf("  num=%d\n", servers->num);
+    /*printf("  num=%d\n", servers->num);
     int i;
     for (i = 0; i < servers->num; i++) {
         printf("  %s:%d\n", servers->IPs[i], servers->ports[i]);
-    }
+    }*/
     
     fileSize = getFileSize(filename);
     if (fileSize < 1) {
@@ -158,59 +161,89 @@ void freeServerList()
 
 int getFileSize(char *filename)
 {
-    int fileSize = 0, sockfd, n;
-    char recvline[MAXLINE], sizePacket[MAXLINE];;
-    struct sockaddr_in servaddr;
+    int fileSize = 0;
     
-    bzero(sizePacket, MAXLINE);
-    bzero(filename, MAXLINE);
-    bzero(recvline, MAXLINE);
+    int sockfd, n;
+    socklen_t len;
+    struct sockaddr_in servaddr;
+    struct sockaddr *preply_addr;
+    packet_type *request_packet, *reply_packet;
+    
+    const int on = 1;
+    sigset_t sigset_alarm;
+    
+    bzero(filename, FILENAME_LENGTH);
+    preply_addr = calloc(sizeof(servaddr), 1);
+    
     
     printf("Enter file name: ");
-    fgets(filename, MAXLINE/2, stdin);  //should be enough room, right?
+    fgets(filename, FILENAME_LENGTH, stdin);
     filename[strcspn(filename, "\n")] = 0;
     
-    //Try to connect to a server
-    int i = 0;
-    while (1) {
-        //If we've tried all servers then just crash
-        if (i >= servers->num) {
-            err_sys("getFileSize():  ERROR: No servers reachable, tried %d!\n", i);
-        }
+    //Try every server
+    int i;
+    for (i = 0; i < servers->num; i++) {
         
-        bzero(&servaddr, sizeof(servaddr));
-        sockfd = Socket(AF_INET, SOCK_STREAM, 0);
-        
+        //Set up socket and server IP address
+        bzero(&servaddr, sizeof (struct sockaddr_in));
         servaddr.sin_family = AF_INET;
         servaddr.sin_port = htons(servers->ports[i]);
         if (inet_pton(AF_INET, servers->IPs[i], &servaddr.sin_addr) <= 0) {
             err_quit("getFileSize():  ERROR: inet_pton error for %s\n", servers->IPs[i]);
         }
+        sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
+        if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)) < 0) {
+            err_sys("getFileSize(): setsockopt() error: %s\n", strerror(errno));
+        }
+        printf("  Trying server %s:%u\n", inet_ntoa(servaddr.sin_addr), servaddr.sin_port);
         
-        //If connection is successful then break, if not, i++ and try next one
-        if (connect(sockfd, (SA *) &servaddr, sizeof(servaddr)) < 0) {
-            i++;
-            continue;
-        } else {
-            break;
+        //Sigalarm stuff?
+        sigemptyset(&sigset_alarm);
+        sigaddset(&sigset_alarm, SIGALRM);
+        signal(SIGALRM, recvfrom_alarm);
+        
+        //create the packet
+        request_packet = calloc(sizeof(packet_type), 1);
+        reply_packet = calloc(sizeof(packet_type) + MAX_DATA_SIZE - 1, 1);
+        request_packet->opcode = size_request;
+        request_packet->size = 0;
+        request_packet->start = 0;
+        strncpy(request_packet->filename, filename, FILENAME_LENGTH);
+        
+        //send the packet!
+        Sendto(sockfd, request_packet, sizeof(packet_type), 0, &servaddr, sizeof(servaddr));
+        printf("  Data sent, wait for reply...\n");
+        for(;;) {
+            len = sizeof(servaddr);
+            sigprocmask(SIG_UNBLOCK, &sigset_alarm, NULL);
+            n = recvfrom(sockfd, reply_packet, sizeof(packet_type) + MAX_DATA_SIZE - 1, 
+                         0, preply_addr, &len);
+            sigprocmask(SIG_BLOCK, &sigset_alarm, NULL);
+            if (n < 0) {
+                if (errno == EINTR) {
+                    printf("  Server timeout\n");
+                    break; //This server timed out, let's try again...
+                } else{
+                    err_sys("getFileSize(): recvfrom error: ", strerror(errno));
+                }
+            } else {
+                if (reply_packet->opcode == size_reply) {
+                    break;
+                } else {
+                    //Got bad reply, try another server.  
+                    //There's probably a better way to handle this...
+                    break;
+                }
+            }
         }
+        if (reply_packet->opcode == size_reply) break;
     }
-    printf("getFileSize():  Connected to %s:%d\n", servers->IPs[i], servers->ports[i]);
-    sprintf(sizePacket, "%d\n%d\n\n%s", -1, -1, filename);
-    
-    printf("getFileSize():  sending \"%s\"\n", sizePacket);
-    Write(sockfd, sizePacket, strlen(sizePacket));
-    
-    while ((n = Read(sockfd, recvline, MAXLINE-1)) > 0) {
-        recvline[n] = 0;
-        printf("recieved \"%s\"\n", recvline);
-        if (sscanf(recvline, "%d", &fileSize) != 1) {
-            printf("getFileSize():  sscanf() ERROR.  Server returned:\n  %s\n\n", recvline);
-            exit(4);
-        }
+    //We can either break when we run out of servers or when we get a packet
+    if (i >= servers->num) {//we ran out
+        err_sys("getFileSize():  ERROR: No servers reachable, tried %d!\n", i);
+    } else {//we got a size_reply packet
+        fileSize = reply_packet->size;
     }
-    
-    printf("getFileSize():  Returning %d\n\n", fileSize);
     return fileSize;
 }
 
@@ -377,4 +410,10 @@ void *childDownloader (void *threadInfo)
     free(recvline);
     free(sizePacket);
     pthread_exit((void *) fileChunk);
+}
+
+static void recvfrom_alarm (int signo)
+{
+    //Write(pipefd[1], "", 1);
+    return;
 }

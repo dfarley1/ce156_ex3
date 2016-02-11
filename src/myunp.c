@@ -53,7 +53,7 @@ int Bind(int sockfd, const struct sockaddr *myaddr, socklen_t addrlen)
 
     if ( (n = bind(sockfd, myaddr, addrlen)) < 0)
     {
-        err_sys("bind error");
+        err_sys("bind error: %s", strerror(errno));
     }
 
     return n;
@@ -80,7 +80,7 @@ int Accept(int sockfd, struct sockaddr *cliaddr, socklen_t *addrlen)
 
     if ( (n = accept(sockfd, cliaddr, addrlen)) < 0)
     {
-        printf("  Accept() error: %s!  Ignoring connection.", strerror(errno));
+        printf("  Accept() error: %s!  Ignoring connection.\n", strerror(errno));
     }
 
     return n;
@@ -92,7 +92,7 @@ int Close(int sockfd)
 
     if ( (n = close(sockfd)) < 0)
     {
-        printf("  Close() error: %s!  What do I do!?", strerror(errno));
+        printf("  Close() error: %s!  What do I do!?\n", strerror(errno));
     }
 
     return n;
@@ -104,7 +104,7 @@ int Read(int sockfd, char *buffer, int bufferlen)
 
     if ( (n = read(sockfd, buffer, bufferlen)) < 0)
     {
-        printf("  Read() error: %s!  Closing connection...", strerror(errno));
+        printf("  Read() error: %s!  Closing connection...\n", strerror(errno));
         Close(sockfd);
     }
 
@@ -117,7 +117,21 @@ int Write(int sockfd, char *buffer, int bufferlen)
 
     if ( (n = write(sockfd, buffer, bufferlen)) < 0)
     {
-        printf("  Write() error: %s!  Closing connection...", strerror(errno));
+        printf("  Write() error: %s!  Closing connection...\n", strerror(errno));
+        Close(sockfd);
+    }
+
+    return n;
+}
+
+int Sendto(int sockfd, const void *buf, size_t len, int flags, 
+           const struct sockaddr *dest_addr, socklen_t addrlen)
+{
+    int n;
+
+    if ( (n = sendto(sockfd, buf, len, flags, dest_addr, addrlen)) < 0)
+    {
+        printf("  Sendto() error: %s!  Closing connection...\n", strerror(errno));
         Close(sockfd);
     }
 

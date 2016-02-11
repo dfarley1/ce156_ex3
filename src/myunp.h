@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 
 #define LISTENQ 1024
 #define MAXLINE 4096
