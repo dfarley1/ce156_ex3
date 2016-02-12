@@ -16,13 +16,15 @@ typedef struct {
 
 typedef struct {
     char *filename;
-    int start, size, thread_id;
+    int start;
+    int size;
+    int thread_id;
 } tInfo_t;
 
 
 servers_t *servers;
 
-void readServerList(FILE *serversFile);
+void readServerList(char **argv);
 void freeServerList();
 packet_type *getFileSize(char *filename);
 void downloadFile(char *filename, int fileSize);
@@ -31,10 +33,8 @@ static void recvfrom_alarm(int);
 
 int main(int argc, char **argv)
 {
-    int numConns = 0;
     char filename[FILENAME_LENGTH + 1];
-    FILE *serversFile;
-    packet_type *fileSize;
+    packet_type *p_size;
     
     //arg checking
     //printf("checking args...\n");
@@ -42,6 +42,26 @@ int main(int argc, char **argv)
         printf("  Usage: myclient <server-info.text> <num connections>\n\n");
         exit(1);
     }
+    readServerList(argv);
+    
+    //get a size_reply packet containing the filename and size
+    p_size = getFileSize(filename);
+    
+    printf("main: got fileSize=%d!\n", p_size->size);
+    strcpy(filename, p_size->filename);
+    downloadFile(filename, p_size->size);
+    free(p_size);
+    
+    freeServerList();
+    return 0;
+}
+
+//Read server IPs/ports into string array
+//Modified from https://stackoverflow.com/a/19174415
+void readServerList(char **argv)
+{
+    int max_line_len = 30, numConns = 0;
+    FILE* serversFile;
     
     if (sscanf(argv[2], "%d", &numConns) != 1) {
         printf("  Error: Invalid num connections\n\n");
@@ -53,27 +73,6 @@ int main(int argc, char **argv)
         printf("  Error opening server-info.text: %d: %s\n\n", errno, strerror(errno));
         exit(3);
     }
-    readServerList(serversFile);
-    fclose(serversFile);
-    
-    servers->num = (servers->num > numConns)?(numConns):(servers->num);
-    
-    //get a size_reply packet containing the filename and size
-    fileSize = getFileSize(filename);
-    
-    printf("main: got fileSize=%d!\n", fileSize->size);
-    free(fileSize);
-    //downloadFile(filename, fileSize);
-    
-    freeServerList();
-    return 0;
-}
-
-//Read server IPs/ports into string array
-//Modified from https://stackoverflow.com/a/19174415
-void readServerList(FILE *serversFile)
-{
-    int max_line_len = 30;
     
     servers = calloc(1, sizeof(servers_t));
     servers->linesAlloced = 4;
@@ -137,6 +136,16 @@ void readServerList(FILE *serversFile)
         servers->ports[i] = strtoul(port_num_str, NULL, 10);
         *port_num_str = '\0';
     }
+    fclose(serversFile);
+    
+    servers->num = (servers->num > numConns)?(numConns):(servers->num);
+    
+    /*
+    printf("  num=%d\n", servers->num);
+    for (i = 0; i < servers->num; i++) {
+        printf("  %s:%d\n", servers->IPs[i], servers->ports[i]);
+    }
+    */
 }
 
 packet_type *getFileSize(char *filename)
@@ -382,15 +391,14 @@ void *childDownloader (void *threadInfo)
     memcpy(fileChunk, (strstr(recvline, "\n\n") + 2), tInfo->size);
     fileChunk[tInfo->size] = 0;
     
-    /*
+
     //Print what we got
-    printf("childDownloader(%d): Chunk received: ----------\n", tInfo->thread_id);
-    int t;
-    for (t = 0; t < tInfo->size; t++) {
-        printf("%4d ", fileChunk[t]);
-    }
-    printf("\n----------\n");
-    */
+    //printf("childDownloader(%d): Chunk received: ----------\n", tInfo->thread_id);
+    //int t;
+    //for (t = 0; t < tInfo->size; t++) {
+    //    printf("%4d ", fileChunk[t]);
+    //}
+    //printf("\n----------\n");
     
     free(recvline);
     free(sizePacket);
