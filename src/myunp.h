@@ -33,3 +33,6 @@ int Accept(int sockfd, struct sockaddr *cliaddr, socklen_t *addrlen);
 int Close(int sockfd);
 int Read(int sockfd, char *buffer, int bufferlen);
 int Write(int sockfd, char *buffer, int bufferlen);
+int Sendto(int sockfd, const void *buf, size_t len, int flags, 
+           const struct sockaddr *dest_addr, socklen_t addrlen);
+

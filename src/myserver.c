@@ -7,18 +7,20 @@
 #include "myunp.h"
 #include "globals.h"
 
-int sendFileSize(int connfd, char *filename);
-int sendFileChunk(int connfd, char *filename, int start, int size);
+int sockfd;
+
+void sendFileSize(packet_type *p_recv, struct sockaddr_in *cliaddr, socklen_t *len);
+void sendFileChunk(packet_type *p_recv, struct sockaddr_in *cliaddr, socklen_t *len);
 
 int main(int argc, char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     
-    int sockfd, n;
+    int n;
     socklen_t len;
     unsigned int port_num;
     struct sockaddr_in servaddr, cliaddr;
-    packet_type *p_recv = calloc(sizeof(packet_type) + MAX_DATA_SIZE - 1, 1);
+    packet_type *p_recv = new_blank_packet();
     
     //Check arguments
     if (argc != 2) {
@@ -59,60 +61,66 @@ int main(int argc, char **argv)
         } else {
             switch (p_recv->opcode) {
                 case size_request:
-                    //sendFileSize
-                    printf("size_request\n");
+                    printf("Packet received: size_request -> sendFileSize()\n");
+                    sendFileSize(p_recv, &cliaddr, &len);
                     break;
                 case size_reply:
-                    //ignore?
-                    printf("size_reply\n");
+                    printf("Packet received: size_reply, ignoring...\n");
                     break;
                 case chunk_request:
-                    //sendFileChunk
-                    printf("chunk_request\n");
+                    printf("Packet received: chunk_request -> sendFileChunk()\n");
+                    sendFileChunk(p_recv, &cliaddr, &len);
                     break;
                 case chunk_reply:
                     //ignore?
-                    printf("chunk_reply\n");
+                    printf("Packet received: chunk_reply, ignoring...\n");
                     break;
                 case error:
                     //ignore?
-                    printf("error\n");
+                    printf("Packet received: error, ignoring...\n");
                     break;
                 default:
                     //ignore
+                    printf("Packet received: other, ignoring...\n");
                     break;
             }
         }
+        free(p_recv);
+        p_recv = new_blank_packet();
     }
     
     return 0;
 }
 
-int sendFileSize(int connfd, char *filename)
+void sendFileSize(packet_type *p_recv, struct sockaddr_in *cliaddr, socklen_t *len)
 {
-    char output[MAXLINE];
     struct stat st;
-    bzero(output, MAXLINE);
+    packet_type *reply_packet;
     
-    if (stat(filename, &st) != 0) {
-        printf("sendFileSize(): stat() ERROR. Sending \"%s\" to client", strerror(errno));
-        strcpy(output, strerror(errno));
-        Write(connfd, output, strlen(output));
-        Close(connfd);
-        return -1;
+    if (stat(p_recv->filename, &st) != 0) {
+        //uh oh, send error packet
+        printf("sendFileSize(): stat() ERROR, sending \"%s\" to %s:%u...\n", 
+               strerror(errno), inet_ntoa(cliaddr->sin_addr), cliaddr->sin_port);
+        reply_packet = new_packet(error, strlen(strerror(errno)), 
+                                               0, p_recv->filename, strerror(errno));
     } else {
-        sprintf(output, "%d", st.st_size);
-        printf("Sending \"%s\" to client...", output);
-        Write(connfd, output, strlen(output));
-        Close(connfd);
-        return 0;
+        //got size, send size_reply
+        printf("sendFileSize(): got size %d, sending to %s:%u...\n", 
+               st.st_size, inet_ntoa(cliaddr->sin_addr), cliaddr->sin_port);
+        reply_packet = new_packet(size_reply, st.st_size, 0, p_recv->filename, NULL);
     }
-    
-    return 0;
+    Sendto(sockfd, reply_packet, sizeof(packet_type) + reply_packet->size, 0, (SA *) cliaddr, sizeof(*cliaddr));
+    free(reply_packet);
 }
 
-int sendFileChunk(int connfd, char *filename, int start, int size)
+void sendFileChunk(packet_type *p_recv, struct sockaddr_in *cliaddr, socklen_t *len)
 {
+    struct stat st;
+    FILE *fp;
+    packet_type *p_reply = new_blank_packet();
+    
+    
+    /*
     int retval = 0;
     char *output;
     struct stat st;
@@ -192,4 +200,5 @@ int sendFileChunk(int connfd, char *filename, int start, int size)
     Close(connfd);
     free(output);
     return retval;
+    */
 }

@@ -131,8 +131,7 @@ int Sendto(int sockfd, const void *buf, size_t len, int flags,
 
     if ( (n = sendto(sockfd, buf, len, flags, dest_addr, addrlen)) < 0)
     {
-        printf("  Sendto() error: %s!  Closing connection...\n", strerror(errno));
-        Close(sockfd);
+        printf("  Sendto() error: %s!\n", strerror(errno));
     }
 
     return n;

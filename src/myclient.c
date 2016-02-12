@@ -24,16 +24,17 @@ servers_t *servers;
 
 void readServerList(FILE *serversFile);
 void freeServerList();
-int getFileSize(char *filename);
+packet_type *getFileSize(char *filename);
 void downloadFile(char *filename, int fileSize);
 void *childDownloader (void *threadInfo);
 static void recvfrom_alarm(int);
 
 int main(int argc, char **argv)
 {
-    int numConns = 0, fileSize;
+    int numConns = 0;
     char filename[FILENAME_LENGTH + 1];
     FILE *serversFile;
+    packet_type *fileSize;
     
     //arg checking
     //printf("checking args...\n");
@@ -47,32 +48,22 @@ int main(int argc, char **argv)
         exit(2);
     }
     
-    //printf("trying to fopen(%s)...\n", argv[1]);
+    //Get the list of servers
     if ((serversFile = fopen(argv[1], "r")) == NULL) {
         printf("  Error opening server-info.text: %d: %s\n\n", errno, strerror(errno));
         exit(3);
-    } 
-    
-    //Get the list of servers
-    //printf("starting read....\n");
+    }
     readServerList(serversFile);
     fclose(serversFile);
     
     servers->num = (servers->num > numConns)?(numConns):(servers->num);
     
-    /*printf("  num=%d\n", servers->num);
-    int i;
-    for (i = 0; i < servers->num; i++) {
-        printf("  %s:%d\n", servers->IPs[i], servers->ports[i]);
-    }*/
-    
+    //get a size_reply packet containing the filename and size
     fileSize = getFileSize(filename);
-    if (fileSize < 1) {
-        exit(4);
-    }
     
-    downloadFile(filename, fileSize);
-    
+    printf("main: got fileSize=%d!\n", fileSize->size);
+    free(fileSize);
+    //downloadFile(filename, fileSize);
     
     freeServerList();
     return 0;
@@ -148,103 +139,97 @@ void readServerList(FILE *serversFile)
     }
 }
 
-void freeServerList()
+packet_type *getFileSize(char *filename)
 {
-    int i;
-    for (i = 0; i < servers->linesAlloced; i++) {
-        free(servers->IPs[i]);
-    }
-    free(servers->IPs);
-    free(servers->ports);
-    free(servers);
-}
-
-int getFileSize(char *filename)
-{
-    int fileSize = 0;
-    
     int sockfd, n;
     socklen_t len;
     struct sockaddr_in servaddr;
-    struct sockaddr *preply_addr;
     packet_type *request_packet, *reply_packet;
     
-    const int on = 1;
-    sigset_t sigset_alarm;
+    //Set sigalarm action
+    struct sigaction sact = {
+        .sa_handler = recvfrom_alarm,
+        .sa_flags = 0,
+    };
+    if (sigaction(SIGALRM, &sact, NULL) == -1) {
+        err_sys("getFileSize(): sigaction error: %s", strerror(errno));
+    }
     
-    bzero(filename, FILENAME_LENGTH);
-    preply_addr = calloc(sizeof(servaddr), 1);
-    
-    
-    printf("Enter file name: ");
-    fgets(filename, FILENAME_LENGTH, stdin);
-    filename[strcspn(filename, "\n")] = 0;
-    
-    //Try every server
-    int i;
-    for (i = 0; i < servers->num; i++) {
+    //Loop until a valid size_reply packet is received.
+    do {
+        //get filename from user
+        bzero(filename, FILENAME_LENGTH);
+        printf("Enter file name: ");
+        fgets(filename, FILENAME_LENGTH, stdin);
+        filename[strcspn(filename, "\n")] = 0;
         
-        //Set up socket and server IP address
-        bzero(&servaddr, sizeof (struct sockaddr_in));
-        servaddr.sin_family = AF_INET;
-        servaddr.sin_port = htons(servers->ports[i]);
-        if (inet_pton(AF_INET, servers->IPs[i], &servaddr.sin_addr) <= 0) {
-            err_quit("getFileSize():  ERROR: inet_pton error for %s\n", servers->IPs[i]);
-        }
-        sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
-        if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)) < 0) {
-            err_sys("getFileSize(): setsockopt() error: %s\n", strerror(errno));
-        }
-        printf("  Trying server %s:%u\n", inet_ntoa(servaddr.sin_addr), servaddr.sin_port);
-        
-        //Sigalarm stuff?
-        sigemptyset(&sigset_alarm);
-        sigaddset(&sigset_alarm, SIGALRM);
-        signal(SIGALRM, recvfrom_alarm);
-        
-        //create the packet
-        request_packet = calloc(sizeof(packet_type), 1);
-        reply_packet = calloc(sizeof(packet_type) + MAX_DATA_SIZE - 1, 1);
-        request_packet->opcode = size_request;
-        request_packet->size = 0;
-        request_packet->start = 0;
-        strncpy(request_packet->filename, filename, FILENAME_LENGTH);
-        
-        //send the packet!
-        Sendto(sockfd, request_packet, sizeof(packet_type), 0, &servaddr, sizeof(servaddr));
-        printf("  Data sent, wait for reply...\n");
-        for(;;) {
+        //Try every server
+        int i;
+        for (i = 0; i < servers->num * NUM_ATTEMPTS; i++) {
+            //Set up socket and server IP address
+            bzero(&servaddr, sizeof (struct sockaddr_in));
+            servaddr.sin_family = AF_INET;
+            servaddr.sin_port = htons(servers->ports[i%servers->num]);
+            if (inet_pton(AF_INET, servers->IPs[i%servers->num], &servaddr.sin_addr) <= 0) {
+                err_quit("getFileSize():  ERROR: inet_pton error for %s\n", servers->IPs[i%servers->num]);
+            }
+            sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
+            printf("  Trying server %s:%u\n", inet_ntoa(servaddr.sin_addr), servaddr.sin_port);
+            
+            //create the request packet and allocate space for reply
+            request_packet = new_packet(size_request, 0, 0, filename, NULL);
+            reply_packet = new_blank_packet();
+            
+            //send the packet!
+            Sendto(sockfd, request_packet, sizeof(packet_type), 0, (SA *) &servaddr, sizeof(servaddr));
+            printf("  Data sent, wait for reply...\n");
             len = sizeof(servaddr);
-            sigprocmask(SIG_UNBLOCK, &sigset_alarm, NULL);
+            
+            //wait up to TIMEOUT seconds for reply
+            alarm(TIMEOUT_PERIOD);
             n = recvfrom(sockfd, reply_packet, sizeof(packet_type) + MAX_DATA_SIZE - 1, 
-                         0, preply_addr, &len);
-            sigprocmask(SIG_BLOCK, &sigset_alarm, NULL);
+                         0, (SA *) &servaddr, &len);
+            free(request_packet); //No need for that anymore
             if (n < 0) {
-                if (errno == EINTR) {
-                    printf("  Server timeout\n");
-                    break; //This server timed out, let's try again...
-                } else{
+                if (errno == EINTR) { //This server timed out, let's try another
+                    printf("  Server timeout. Trying next...\n");
+                    free(reply_packet);
+                    continue; 
+                } else { //There was some other error
                     err_sys("getFileSize(): recvfrom error: ", strerror(errno));
                 }
-            } else {
-                if (reply_packet->opcode == size_reply) {
-                    break;
-                } else {
-                    //Got bad reply, try another server.  
-                    //There's probably a better way to handle this...
-                    break;
-                }
+            } else { //got a packet!
+                alarm(0);
+                break;
             }
         }
-        if (reply_packet->opcode == size_reply) break;
-    }
-    //We can either break when we run out of servers or when we get a packet
-    if (i >= servers->num) {//we ran out
-        err_sys("getFileSize():  ERROR: No servers reachable, tried %d!\n", i);
-    } else {//we got a size_reply packet
-        fileSize = reply_packet->size;
-    }
-    return fileSize;
+        //We exit the for() either when we run out of servers or when we get a packet
+        if (i >= servers->num) {//we ran out
+            err_sys("getFileSize():  ERROR: No servers reachable, tried %d!\n", i);
+            
+        } else {//we got a packet
+            if (reply_packet->opcode == size_reply) {
+                printf("  getFileSize(): Received a valid size_reply packet!\n");
+                
+            } else {
+                if (reply_packet->opcode == error) {
+                    int j;
+                    for (j = 0; j < reply_packet->size; j++) {
+                        printf("%c", (&(reply_packet->data))[j]);
+                    }
+                    printf(".(%d)  ", reply_packet->size);
+                } else if (reply_packet->opcode == none) {
+                    printf("  getFileSize(): Received no packet.  ");
+                } else {
+                    printf("  getFileSize(): Received an invalid packet\n");
+                }
+                free(reply_packet);
+                reply_packet = NULL;
+            }
+        }
+    } while (!reply_packet || (reply_packet->opcode != size_reply));
+    
+    return reply_packet;
 }
 
 void downloadFile(char *filename, int fileSize)
@@ -412,8 +397,18 @@ void *childDownloader (void *threadInfo)
     pthread_exit((void *) fileChunk);
 }
 
+void freeServerList()
+{
+    int i;
+    for (i = 0; i < servers->linesAlloced; i++) {
+        free(servers->IPs[i]);
+    }
+    free(servers->IPs);
+    free(servers->ports);
+    free(servers);
+}
+
 static void recvfrom_alarm (int signo)
 {
-    //Write(pipefd[1], "", 1);
-    return;
+    return; //We just need to interrupt recvfrom
 }
