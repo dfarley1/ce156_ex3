@@ -59,30 +59,14 @@ int main(int argc, char **argv)
             //"peer has performed an orderly shutdown"
             //What do?
         } else {
-            switch (p_recv->opcode) {
-                case size_request:
-                    printf("Packet received: size_request -> sendFileSize()\n");
-                    sendFileSize(p_recv, &cliaddr, &len);
-                    break;
-                case size_reply:
-                    printf("Packet received: size_reply, ignoring...\n");
-                    break;
-                case chunk_request:
-                    printf("Packet received: chunk_request -> sendFileChunk()\n");
-                    sendFileChunk(p_recv, &cliaddr, &len);
-                    break;
-                case chunk_reply:
-                    //ignore?
-                    printf("Packet received: chunk_reply, ignoring...\n");
-                    break;
-                case error:
-                    //ignore?
-                    printf("Packet received: error, ignoring...\n");
-                    break;
-                default:
-                    //ignore
-                    printf("Packet received: other, ignoring...\n");
-                    break;
+            if (p_recv->opcode == size_request) {
+                printf("Packet received: size_request -> sendFileSize()\n");
+                sendFileSize(p_recv, &cliaddr, &len);
+            } else if (p_recv->opcode == chunk_request) {
+                printf("Packet received: chunk_request -> sendFileChunk()\n");
+                sendFileChunk(p_recv, &cliaddr, &len);
+            } else {
+                printf("Packet received: %d, ignoring...\n", p_recv->opcode);
             }
         }
         free(p_recv);
@@ -95,64 +79,79 @@ int main(int argc, char **argv)
 void sendFileSize(packet_type *p_recv, struct sockaddr_in *cliaddr, socklen_t *len)
 {
     struct stat st;
-    packet_type *reply_packet;
+    packet_type *p_reply;
     
     if (stat(p_recv->filename, &st) != 0) {
         //uh oh, send error packet
         printf("sendFileSize(): stat() ERROR, sending \"%s\" to %s:%u...\n", 
                strerror(errno), inet_ntoa(cliaddr->sin_addr), cliaddr->sin_port);
-        reply_packet = new_packet(error, strlen(strerror(errno)), 
+        p_reply = new_packet(error, strlen(strerror(errno)), 
                                                0, p_recv->filename, strerror(errno));
+        Sendto(sockfd, p_reply, sizeof(packet_type) + p_reply->size, 0, (SA *) cliaddr, sizeof(*cliaddr));
     } else {
         //got size, send size_reply
         printf("sendFileSize(): got size %d, sending to %s:%u...\n", 
                st.st_size, inet_ntoa(cliaddr->sin_addr), cliaddr->sin_port);
-        reply_packet = new_packet(size_reply, st.st_size, 0, p_recv->filename, NULL);
+        p_reply = new_packet(size_reply, st.st_size, 0, p_recv->filename, NULL);
+        Sendto(sockfd, p_reply, sizeof(packet_type), 0, (SA *) cliaddr, sizeof(*cliaddr));
     }
-    Sendto(sockfd, reply_packet, sizeof(packet_type) + reply_packet->size, 0, (SA *) cliaddr, sizeof(*cliaddr));
-    free(reply_packet);
+    
+    free(p_reply);
 }
 
 void sendFileChunk(packet_type *p_recv, struct sockaddr_in *cliaddr, socklen_t *len)
 {
     struct stat st;
     FILE *fp;
-    packet_type *p_reply = new_blank_packet();
+    packet_type *p_reply;
     
+    //check for file
+    if (stat(p_recv->filename, &st) != 0) {
+        printf("sendFileSize(): stat() ERROR, sending \"%s\" to %s:%u...\n", 
+               strerror(errno), inet_ntoa(cliaddr->sin_addr), cliaddr->sin_port);
+        p_reply = new_packet(error, strlen(strerror(errno)), 0, p_recv->filename, strerror(errno));
+    //check request bounds against file size
+    } else if (p_recv->start + p_recv->size > st.st_size) {
+        printf("sendFileSize(): out of bounds ERROR, sending \"%s\" to %s:%u...\n", 
+               ERR_OUT_OF_BOUNDS, inet_ntoa(cliaddr->sin_addr), cliaddr->sin_port);
+        p_reply = new_packet(error, strlen(ERR_OUT_OF_BOUNDS), 0, p_recv->filename, ERR_OUT_OF_BOUNDS);
+    //looks like we're good
+    } else if (p_recv->size > MAX_DATA_SIZE) {
+        printf("sendFileSize(): illegal size value ERROR, sending \"%s\" to %s:%u...\n", 
+               ERR_ILLEGAL_SIZE, inet_ntoa(cliaddr->sin_addr), cliaddr->sin_port);
+        p_reply = new_packet(error, strlen(ERR_ILLEGAL_SIZE), 0, p_recv->filename, ERR_ILLEGAL_SIZE);
+    } else {
+        fp = fopen(p_recv->filename, "r");
+        if (fp) {
+            fseek(fp, p_recv->start, SEEK_SET);
+            int iter = 0;
+            p_reply = new_packet(chunk_reply, p_recv->size, p_recv->start, p_recv->filename, NULL);
+            
+            do {
+                (&(p_reply->data))[iter++] = fgetc(fp);
+                if (iter >= p_recv->size) break;
+            } while (1);
+            fclose(fp);
+            
+            printf("sendFileChunk(): SUCCESS: Sending ----------\n");
+            int t;
+            for (t = 0; t < p_reply->size; t++) {
+                printf("%4d ", (&(p_reply->data))[t]);
+            }
+            printf("\n----------\n");
+            
+        } else {
+            printf("sendFileSize(): fopen() ERROR, sending \"%s\" to %s:%u...\n", 
+                    strerror(errno), inet_ntoa(cliaddr->sin_addr), cliaddr->sin_port);
+            p_reply = new_packet(error, strlen(strerror(errno)), 0, p_recv->filename, strerror(errno));
+                                                   
+        }
+    }
+    
+    Sendto(sockfd, p_reply, sizeof(packet_type) + p_reply->size, 0, (SA *) cliaddr, sizeof(*cliaddr));
+    free(p_reply);
     
     /*
-    int retval = 0;
-    char *output;
-    struct stat st;
-    //bzero(output, size);
-    
-    char * header;
-    asprintf(&header, "%d\n%d\n\n", start, size);
-    
-    if (stat(filename, &st) != 0) {
-        //-1 header specifies error, data portion will contain strerror
-        output = calloc(8 + strlen(strerror(errno)) + 1, sizeof(char));
-        strcpy(output, "-1\n-1\n\n");
-        strcpy(output+strlen(output), strerror(errno));
-        
-        printf("sendFileChunk(): stat() ERROR. Sending \"%s\" to client", output);
-        retval = -1;
-    } else {
-        //if sizes don't match, send error
-        if (st.st_size < size) {
-            asprintf(&output, "-1\n-1\n\nFile sizes do not match!  reported size=%d\n  found size=%d", 
-                    size, st.st_size);
-            
-            printf("sendFileChunk(): ERROR.  Sending \"%s\" to client", output);
-            retval = -2;
-        //else if the start point is beyond the start of the file, send error
-        } else if (start >= st.st_size) {
-            asprintf(&output, "-1\n-1\n\nStart position larger than file size!  start=%d\n  size=%d", 
-                    start, size);
-            
-            printf("sendFileChunk(): ERROR.  Sending \"%s\" to client", output);
-            retval = -3;
-        //otherwise, time to open the file
         } else {
             asprintf(&output, "%d\n%d\n\n", start, size);
             output = realloc(output, strlen(output) + size + 2);

@@ -30,6 +30,7 @@ packet_type *getFileSize(char *filename);
 void downloadFile(char *filename, int fileSize);
 void *childDownloader (void *threadInfo);
 static void recvfrom_alarm(int);
+packet_type *get_chunk(packet_type *p_request, int t_id);
 
 int main(int argc, char **argv)
 {
@@ -227,8 +228,6 @@ packet_type *getFileSize(char *filename)
                         printf("%c", (&(reply_packet->data))[j]);
                     }
                     printf(".(%d)  ", reply_packet->size);
-                } else if (reply_packet->opcode == none) {
-                    printf("  getFileSize(): Received no packet.  ");
                 } else {
                     printf("  getFileSize(): Received an invalid packet\n");
                 }
@@ -277,7 +276,6 @@ void downloadFile(char *filename, int fileSize)
     //get string pointers from children
     for (i = 0; i < servers->num; i++) {
         pthread_join(tid[i], &vptr_return[i]);
-        printf("\n----- %d: -----\n|%s|\n----------\n", i, (char *)vptr_return[i]);
         //free(vptr_return[i]);
     }
     
@@ -312,97 +310,129 @@ void downloadFile(char *filename, int fileSize)
 
 void *childDownloader (void *threadInfo)
 {
-    char *sizePacket, *recvline, *fileChunk;
-    int sockfd = 0, n, tStart = 0, tSize = 0;
-    struct sockaddr_in servaddr;
     tInfo_t *tInfo = (tInfo_t *) threadInfo;
+    int sockfd, 
+        n,
+        chunk_start = tInfo->start,
+        chunk_size = MAX_DATA_SIZE;
+    char *data_string = calloc(tInfo->size, 1);
+    socklen_t len;
+    struct sockaddr_in servaddr;
+    packet_type *p_request, *p_reply;
     
-    setvbuf(stdout,NULL,_IONBF,0);
-    printf("Thread %d created: \"%s\"|%d|%d\n",
-             tInfo->thread_id, tInfo->filename, tInfo->start, tInfo->size);
-    
-    //Let's offset the children so they're not all trying to connect at the same time.
-    // Does this actually help at all?  Not really sure...
-    //usleep(100000*(tInfo->thread_id));
-    
-    int i = 0;
-    while (1) {
-        //If we've tried all servers then wait a second and try again
-        if (i >= servers->num) {
-            usleep(1000000);
-            i = 0;
+    //Since we're not gettin the whole thing at once we need to count out the chunks and request them individually
+    //At the end of the loop we'll increment chunk_start by the size of the data received
+    while (chunk_start < tInfo->start + tInfo->size) {
+        //if the chunk_size (default MAX) is larger than what's left in this chunk
+        //  then reduce it to what's left.  Basically min(MAX, what's left in the file)
+        if (chunk_size > tInfo->start + tInfo->size - chunk_start) {
+            chunk_size = tInfo->start + tInfo->size - chunk_start;
         }
         
-        bzero(&servaddr, sizeof(servaddr));
-        sockfd = Socket(AF_INET, SOCK_STREAM, 0);
+        p_request = new_packet(chunk_request, chunk_size, chunk_start, tInfo->filename, NULL);
+        printf("childDownloader(%d): requesting chunk %d:%d of %s\n", 
+                tInfo->thread_id, p_request->start, p_request->size, p_request->filename);
         
-        servaddr.sin_family = AF_INET;
-        servaddr.sin_port = htons(servers->ports[i]);
-        if (inet_pton(AF_INET, servers->IPs[i], &servaddr.sin_addr) <= 0) {
-            err_quit("getFileSize():  ERROR: inet_pton error for %s\n", servers->IPs[i]);
+        p_reply = get_chunk(p_request, tInfo->thread_id);
+        free(p_request);
+        if (!p_reply) {
+            printf("childDownloader(%d): did not get a valid chunk, returning NULL to parent...\n", tInfo->thread_id);
+            pthread_exit(NULL);
         }
         
-        //If connection is successful then break, if not, i++ and try next one
-        if (connect(sockfd, (SA *) &servaddr, sizeof(servaddr)) < 0) {
-            i++;
-            continue;
-        } else {
-            break;
+        memcpy(data_string + (chunk_start - tInfo->start), &(p_reply->data), p_reply->size);
+        
+        printf("childDownloader(%d): Chunk (%d) received:\n", tInfo->thread_id, p_reply->size);
+        int t;
+        for (t = 0; t < p_reply->size; t++) {
+            printf("%4d ", data_string[t]);
         }
+        printf("\n----------\n");
+        
+        chunk_start += p_reply->size;
+        free(p_reply);
     }
     
-    printf("childDownloader(%d):  connected to %s:%d\n", 
-            tInfo->thread_id, servers->IPs[i], servers->ports[i]);
-            
-    //Send packet requesting chunk
-    asprintf(&sizePacket, "%d\n%d\n\n%s", tInfo->start, tInfo->size, tInfo->filename);
-    printf("childDownloader(%d):  sending \"%s\"\n", tInfo->thread_id, sizePacket);
-    Write(sockfd, sizePacket, strlen(sizePacket));
+    printf("\n\n-------------------------\nchildDownloader(%d): Chunk (%d) received:\n", tInfo->thread_id, tInfo->size);
+        int t;
+        for (t = 0; t < tInfo->size; t++) {
+            printf("%4d ", data_string[t]);
+        }
+        printf("\n--------------------------------------------\n\n");
     
     
-    
-    //get the chunk
-    recvline = calloc(strlen(sizePacket) + tInfo->size + 3, sizeof(char));
-    while ((n = Read(sockfd, recvline + n, strlen(sizePacket) + tInfo->size - 1)) > 0) {
-        printf("%d\n", n);
-        recvline[n] = 0;
-    }
-    
-    //Print what we got
-    printf("childDownloader(%d): Chunk received: ----------\n", tInfo->thread_id);
-    int t;
-    for (t = 0; t < strlen(sizePacket) + tInfo->size - strlen(tInfo->filename); t++) {
-        printf("%4d ", recvline[t]);
-    }
-    printf("\n----------\n");
-    
-    if (sscanf(recvline, "%d\n%d", &tStart, &tSize) != 2) {
-        printf("childDownloader(%d):  sscanf() ERROR: Could not get header. Server returned:\n  %s\n\n", 
-                tInfo->thread_id, recvline);
-        pthread_exit(NULL);
-    }
-    if ((tStart != tInfo->start) || (tSize != tInfo->size)) {
-        printf("childDownloader(%d):  sscanf() ERROR: Sizes don't match.\n  %d  %d || %d  %d\n\n", 
-                tInfo->thread_id, tStart, tInfo->start, tSize, tInfo->size);
-        pthread_exit(NULL);
-    }
-    
-    fileChunk = calloc(tInfo->size + 1, sizeof(char));
-    memcpy(fileChunk, (strstr(recvline, "\n\n") + 2), tInfo->size);
-    fileChunk[tInfo->size] = 0;
-    
+    pthread_exit((void *) data_string);
+}
 
-    //Print what we got
-    //printf("childDownloader(%d): Chunk received: ----------\n", tInfo->thread_id);
-    //int t;
-    //for (t = 0; t < tInfo->size; t++) {
-    //    printf("%4d ", fileChunk[t]);
-    //}
-    //printf("\n----------\n");
+packet_type *get_chunk(packet_type *p_request, int t_id)
+{
+    int sockfd, n;
+    socklen_t len;
+    struct sockaddr_in servaddr;
+    packet_type *p_reply;
     
-    free(recvline);
-    free(sizePacket);
-    pthread_exit((void *) fileChunk);
+    //Set sigalarm action
+    struct sigaction sact = {
+        .sa_handler = recvfrom_alarm,
+        .sa_flags = 0,
+    };
+    if (sigaction(SIGALRM, &sact, NULL) == -1) {
+        err_sys("  get_chunk(): sigaction error: %s", strerror(errno));
+    }
+    
+    //this loop tries every server NUM_ATTEMPTS times
+    int i;
+    for (i = t_id; i < servers->num * NUM_ATTEMPTS; i++) {
+        
+        //set up socket for ith server
+        bzero(&servaddr, sizeof (struct sockaddr_in));
+        servaddr.sin_family = AF_INET;
+        servaddr.sin_port = htons(servers->ports[i%servers->num]);
+        if (inet_pton(AF_INET, servers->IPs[i%servers->num], &servaddr.sin_addr) <= 0) {
+            err_quit("  get_chunk():  ERROR: inet_pton error for %s\n", servers->IPs[i%servers->num]);
+        }
+        sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
+        //printf("  get_chunk(): Trying server %s:%u\n", inet_ntoa(servaddr.sin_addr), servaddr.sin_port);
+        
+        p_reply = new_blank_packet();
+        
+        //send the packet!
+        Sendto(sockfd, p_request, sizeof(packet_type), 0, (SA *) &servaddr, sizeof(servaddr));
+        //printf("  get_chunk(): Data sent, wait for reply...\n");
+        len = sizeof(servaddr);
+        
+        //wait up to TIMEOUT seconds for reply
+        alarm(TIMEOUT_PERIOD);
+        n = recvfrom(sockfd, p_reply, sizeof(packet_type) + p_request->size, 
+                     0, (SA *) &servaddr, &len);
+        if (n < 0) {
+            if (errno == EINTR) { //This server timed out, let's try another
+                printf("  get_chunk(): Server timeout. Trying next...\n");
+                free(p_reply);
+                continue; 
+            } else { //There was some other error
+                err_sys("  get_chunk(): recvfrom error: ", strerror(errno));
+            }
+        } else { //got a packet!
+            //If it's a good one, we break
+            if (p_reply->opcode == chunk_reply && p_reply->size == p_request->size) {
+                alarm(0);
+                break;
+            //otherwise, keep trying
+            } else {
+                printf("  get_chunk(): Got a bad packet (opcode=%d, reply_size=%d, request_size=%d)\n", 
+                        p_reply->opcode, p_reply->size, p_request->size);
+                free(p_reply);
+                continue;
+            }
+        }
+    }
+    //We exit the for() either when we run out of servers or when we get a good packet
+    if (i >= servers->num) {//we ran out
+        err_sys("  get_chunk():  ERROR: No servers reachable, tried %d!\n", i);
+    } 
+    //we got a good packet
+    return p_reply;
 }
 
 void freeServerList()
