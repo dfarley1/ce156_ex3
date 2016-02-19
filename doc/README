@@ -1,7 +1,7 @@
-CMPE 156 EX2 - Client/Server to download files from multiple sources concurrently.
+CMPE 156 EX3 - UDP Client/Server to download files from multiple sources concurrently.
 Daniel Farley
 
-See doc/ex2.pdf for assignment requirements. 
+See doc/ex3_0.pdf for assignment requirements. 
 
 ----------
 Files:
@@ -21,6 +21,7 @@ obj/
     myserver.o - 
     myunp.o - 
 src/
+    globals.h - Global constants and structures
     myclient.c - Client code
     myserver.c - Server code
     myunp.h - Header for UNP wrapper (provided)
@@ -30,27 +31,64 @@ src/
 
 ----------
 Usage:
-    Client: myclient <server-into.text> <num connections>
+    Client: myclient <server-info.text> <num connections>
     Server: myserver <port num>
 
 
 ----------
 Specification:
-Packets are transmitted between server and client using a variable-length string (char array) header followed by data as follows:
+Packets are transmitted between server and client using a variable-length struct (packet_type).  This packet consists of:
+    -opcode:    enumeration to specify what the packet is doing
+        -error:         default, used to specify that some error has occured.  
+                        Size is the length of the error string returned
+                
+        -size_request:  Used to request the filesize of a packet from a server
+                        Size is the filesize requested in bytes
+                        
+        -size_reply:    Server's reply to a size_request
+                        Size is the filesize requested in bytes
+                        
+        -chunk_request: Used to request part of the file from a server.
+                        Start specifies where in the file to start grab from
+                        Size specifies how many bytes to sends
+                        
+        -chunk_reply:   Server's reply with the requested data chunk.
+                        Start specifies where in the file to the data was gotten
+                        Size specifies how many bytes are being sent
+                      
+    -start:     integer used in chunk_request and chunk_reply to specify where in the file to start
+    
+    -size:      integer used in error, size_reply, chunk_request, and chunk_reply
+                in an error, specifies how long the error string is
+                is a size_reply, specifies the total length of the file
+                in chunk_request, specifies how many bytes to sends
+                in chunk_reply, specifies how many bytes are being sent
+                
+    -filename:  string used to store the name of the file being discussed
+    
+    -data:      Used as the first byte in a variable-length byte array to store data.  
+                Length of the array is specified by size
+           
 
-"<start>\n<size>\n\n<data>"
+The servers wait for an incoming packet and process it.  If it's a size_request, get the file's size (or an error) and reply to the client.  If it's a chunk_request, get the chunk of file (or an error) and reply to the client.  Otherwise, throw it away.
 
-The start and size parameters are set using printf() on Integer values without variable width. (This is probably a poor design choice...) Start specifies how far into the file to start transmitting from and Size specifies how many bytes should be transmitted.  
-The client will always fill the Data section with the ASCII representation of the file name requested.  A special case is used to request the file size from the server; the client sends "-1\n-1\n\n<filename>" and the server responds with only the number of bytes in the file: "<filesize>".
+The client asks the user for a filename from stdin and then requests the size from the server.  After the server replies with a valid size, the client creates child threads which request chunks of the file in parallel from the servers specified in server-info.text.  
 
-An example of communication between client and server looks something like this:
-Client: "-1\n-1\n\nfile.txt"
-Server: "12"
-Client: "0\n12\n\nfile.txt"
-Server: "0\n12\n\nabcdefghijkl"
+Each child is given an equal part of the file to transfer (file size / # of servers).  The child then requests that part of the file in a series of chunks, trying all servers multiple times if neccesary.  The children compile their chunks into the part of the file they were tasked with and hand them back to the parent.  The parent then compiles these parts into the final file and writes it to disk.
+
+A very basic, single server example looks like this:
+   opcode , size , start , filename , data
+C: size_request, 0, 0, testfile, NULL
+S: size_reply, 23, 0, testfile, NULL    OR    error, 14, 0, testfile, "file not found"
+C-> CC1: 0-10
+    CC2: 11-23
+
+CC1: chunk_request, 10, 0, testfile, NULL               CC2: chunk_request, 13, 10, testfile, NULL
+S: chunk_reply, 10, 0, testfile, <10 bytes of data>     S: chunk_reply, 13, 10, testfile, <13 bytes of data>
+
 
 ----------
-Error checking is done on the client side to make sure that the size sent by the server is a valid number.  The server checks that a file exists and that the start and size parameters are within the file's limits.  If something is wrong the server returns "-1\n-1\n\n<strerror(errno)>".  The client will then print this error and exit.  
+Error checking is almost entirely handled by the client.  The only thing the server checks for is to make sure the file exists and that the request is within bounds of the file.  It will repeatedly ask the user for a filename until a successful request/reply has occured.  The client also checks each chunk received to ensure that the data replied with has the same start and size as requested.  
 
 
 ----------
