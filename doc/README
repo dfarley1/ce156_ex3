@@ -1,4 +1,4 @@
-CMPE 156 EX3 - UDP Client/Server to download files from multiple sources concurrently.
+UDP Client/Server to download files from multiple sources concurrently.
 Daniel Farley
 
 See doc/ex3_0.pdf for assignment requirements. 
